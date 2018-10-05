@@ -62,16 +62,6 @@ var keywords = map[string]TokenName{
 	"Return": RETURN,
 }
 
-func (l *Lexer) readChar() { //逐一读取字符
-	if l.readPosition >= len(l.input) {
-		l.ch = 0
-	} else {
-		l.ch = l.input[l.readPosition]
-	}
-	l.position++
-	l.readPosition++
-}
-
 func New(input string) *Lexer {
 	l := &Lexer{input: input}
 	l.readChar()
@@ -79,32 +69,29 @@ func New(input string) *Lexer {
 }
 
 func newToken(tokenName TokenName, ch byte) Token {
-	return Token{Name: tokenName, Literal: string(ch)}
-}
-
-func proveLetter(ch byte) bool {
-	return 'a' <= ch && ch <= 'z' || 'A' <= ch && ch <= 'Z' || ch == '_'
-
-}
-
-func (l *Lexer) reeadIdentifier() string {
-	position := l.position
-	for proveLetter(l.ch) {
-		l.readChar()
+	return Token{
+		Name:    tokenName,
+		Literal: string(ch),
 	}
-	return l.input[position:l.position]
 }
 
-func proveDigit(ch byte) bool {
-	return '0' <= ch && ch <= '9'
-}
-
-func (l *Lexer) readNumber() string {
-	position := l.position
-	for proveDigit(l.ch) {
-		l.readChar()
+func (l *Lexer) readChar() { //逐一读取字符
+	if l.readPosition >= len(l.input) {
+		l.ch = 0
+	} else {
+		l.ch = l.input[l.readPosition]
 	}
-	return l.input[position:l.position]
+
+	l.position = l.readPosition //这里这样写就正常一点了..otz
+	l.readPosition += 1
+}
+
+func (l *Lexer) peekChar() byte { //只预读一个字符看是否是空即可
+	if l.readPosition >= len(l.input) {
+		return 0
+	}
+	return l.input[l.readPosition]
+
 }
 
 func (l *Lexer) delBlank() {
@@ -113,19 +100,20 @@ func (l *Lexer) delBlank() {
 	}
 }
 
-func LookupIdent(ident string) TokenName { //判断得到的indentifier是否是关键字，如果是可以直接返回tokenname确定类型
-	if tok, ok := keywords[ident]; ok {
-		return tok
+func (l *Lexer) readIdentifier() string {
+	position := l.position
+	for proveLetter(l.ch) {
+		l.readChar()
 	}
-	return IDENT
+	return l.input[position:l.position]
 }
 
-func (l *Lexer) peekChar() byte { //只预读一个字符看是否是空即可
-	if l.readPosition >= len(l.input) {
-		return 0
-	} else {
-		return l.input[l.readPosition]
+func (l *Lexer) readNumber() string {
+	position := l.position
+	for proveDigit(l.ch) {
+		l.readChar()
 	}
+	return l.input[position:l.position]
 }
 
 func (l *Lexer) readText() string {
@@ -139,19 +127,27 @@ func (l *Lexer) readText() string {
 	return l.input[position:l.position]
 }
 
+func proveDigit(ch byte) bool {
+	return '0' <= ch && ch <= '9'
+}
+
+func proveLetter(ch byte) bool {
+	return 'a' <= ch && ch <= 'z' || 'A' <= ch && ch <= 'Z' || ch == '_'
+
+}
+
+func LookupIdent(ident string) TokenName { //判断得到的indentifier是否是关键字，如果是可以直接返回tokenname确定类型
+	if tok, ok := keywords[ident]; ok {
+		return tok
+	}
+	return IDENT
+}
+
 func (l *Lexer) NextToken() Token { //将读取的字符进行基本词法识别
 	var tok Token
 	l.delBlank()
 
 	switch l.ch {
-	case '=':
-		if l.peekChar() == '=' {
-			ch := l.ch
-			l.readChar()
-			tok = Token{Name: EQ, Literal: string(ch) + string(l.ch)}
-		} else {
-			tok = newToken(ASSIGN, l.ch)
-		}
 	case '+':
 		tok = newToken(PLUS, l.ch)
 	case '-':
@@ -187,12 +183,20 @@ func (l *Lexer) NextToken() Token { //将读取的字符进行基本词法识别
 		} else {
 			tok = newToken(BANG, l.ch)
 		}
+	case '=':
+		if l.peekChar() == '=' { //“==”的情况
+			ch := l.ch
+			l.readChar()
+			tok = Token{Name: EQ, Literal: string(ch) + string(l.ch)}
+		} else { //“=”的情况
+			tok = newToken(ASSIGN, l.ch)
+		}
 	case 0:
 		tok.Literal = ""
 		tok.Name = EOF
 	default:
 		if proveLetter(l.ch) {
-			tok.Literal = l.reeadIdentifier()
+			tok.Literal = l.readIdentifier()
 			tok.Name = LookupIdent(tok.Literal)
 			return tok
 		} else if proveDigit(l.ch) {

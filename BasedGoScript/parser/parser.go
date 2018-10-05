@@ -47,12 +47,17 @@ var precedences = map[lexer.TokenName]int{ //将各个token按其次序分类
 	lexer.LPAREN:   CALL,
 }
 
+func (p *Parser) registerInfix(TokenName lexer.TokenName, fn infixParseFn) {
+	p.infixParseFns[TokenName] = fn
+}
+
 func (p *Parser) registerPrefix(TokenName lexer.TokenName, fn prefixParseFn) {
 	p.prefixParseFns[TokenName] = fn
 }
 
-func (p *Parser) registerInfix(TokenName lexer.TokenName, fn infixParseFn) {
-	p.infixParseFns[TokenName] = fn
+func (p *Parser) noPrefixParseFnError(t lexer.TokenName) {
+	msg := fmt.Sprintf("no prefix parse function for %s found", t)
+	p.errors = append(p.errors, msg)
 }
 
 func (p *Parser) Errors() []string {
@@ -60,14 +65,13 @@ func (p *Parser) Errors() []string {
 }
 
 func (p *Parser) peekError(t lexer.TokenName) {
-	msg := fmt.Sprintf("expected next token to be %s, got %s instead",
+	msg := fmt.Sprintf("expected next token to be %s,but got %s instead",
 		t, p.peekToken.Name)
 	p.errors = append(p.errors, msg)
 }
 
-func (p *Parser) nextToken() {
-	p.curToken = p.peekToken
-	p.peekToken = p.l.NextToken()
+func (p *Parser) parseIdentifier() ast.Expression {
+	return &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
 }
 
 func (p *Parser) ParseProgram() *ast.Program {
@@ -85,8 +89,75 @@ func (p *Parser) ParseProgram() *ast.Program {
 	return program
 }
 
-func (p *Parser) parseStatement() ast.Statement {
+func (p *Parser) parseBoolean() ast.Expression {
+	return &ast.Boolean{Token: p.curToken, Value: p.curTokenIs(lexer.TRUE)}
+}
 
+func (p *Parser) parseFuncParameters() []*ast.Identifier { //函数的参数
+	identifiers := []*ast.Identifier{}
+
+	if p.peekTokenIs(lexer.RPAREN) {
+		p.nextToken()
+		return identifiers
+	}
+
+	p.nextToken()
+
+	ident := &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	identifiers = append(identifiers, ident)
+
+	for p.peekTokenIs(lexer.COMMA) {
+		p.nextToken()
+		p.nextToken()
+		ident := &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		identifiers = append(identifiers, ident)
+	}
+
+	if !p.expectPeek(lexer.RPAREN) {
+		return nil
+	}
+
+	return identifiers
+}
+
+func (p *Parser) parseFuncLiteral() ast.Expression {
+	lit := &ast.FuncLiteral{Token: p.curToken}
+
+	if !p.expectPeek(lexer.LPAREN) {
+		return nil
+	}
+
+	lit.Parameters = p.parseFuncParameters()
+
+	if !p.expectPeek(lexer.LBRACE) {
+		return nil
+	}
+
+	lit.Body = p.parseBlockStatement()
+
+	return lit
+}
+
+func (p *Parser) parseNumberLiteral() ast.Expression {
+	lit := &ast.NumberLiteral{Token: p.curToken}
+
+	value, err := strconv.ParseInt(p.curToken.Literal, 0, 64) //将得到的token的string类型的内容转换成int64类型
+	if err != nil {
+		msg := fmt.Sprintf("could not parse %q as number", p.curToken.Literal)
+		p.errors = append(p.errors, msg)
+		return nil
+	}
+
+	lit.Value = value
+
+	return lit
+}
+
+func (p *Parser) parseTextLiteral() ast.Expression {
+	return &ast.TextLiteral{Token: p.curToken, Value: p.curToken.Literal}
+}
+
+func (p *Parser) parseStatement() ast.Statement {
 	switch p.curToken.Name {
 	case lexer.DEF:
 		return p.parseDefStatement()
@@ -95,6 +166,23 @@ func (p *Parser) parseStatement() ast.Statement {
 	default:
 		return p.parseExpressionStatement()
 	}
+}
+
+func (p *Parser) parseBlockStatement() *ast.BlockStatement { //花括号中的内容
+	block := &ast.BlockStatement{Token: p.curToken}
+	block.Statements = []ast.Statement{}
+
+	p.nextToken()
+
+	for !p.curTokenIs(lexer.RBRACE) { //遇到"}"则block结束
+		stmt := p.parseStatement()
+		if stmt != nil {
+			block.Statements = append(block.Statements, stmt)
+		}
+		p.nextToken()
+	}
+
+	return block
 }
 
 func (p *Parser) parseDefStatement() *ast.DefStatement {
@@ -121,65 +209,10 @@ func (p *Parser) parseDefStatement() *ast.DefStatement {
 	return stmt
 }
 
-func (p *Parser) parseIdentifier() ast.Expression {
-	return &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
-}
+func (p *Parser) parseExpressionStatement() *ast.ExpressionStatement {
+	stmt := &ast.ExpressionStatement{Token: p.curToken}
 
-func (p *Parser) parseBoolean() ast.Expression {
-	return &ast.Boolean{Token: p.curToken, Value: p.curTokenIs(lexer.TRUE)}
-}
-
-func (p *Parser) parseNumberLiteral() ast.Expression {
-	lit := &ast.NumberLiteral{Token: p.curToken}
-
-	value, err := strconv.ParseInt(p.curToken.Literal, 0, 64) //将得到的token的string类型的内容转换成int64类型
-	if err != nil {
-		msg := fmt.Sprintf("could not parse %q as integer", p.curToken.Literal)
-		p.errors = append(p.errors, msg)
-		return nil
-	}
-
-	lit.Value = value
-
-	return lit
-}
-
-func (p *Parser) parseGroupedExpression() ast.Expression {
-	p.nextToken()
-
-	exp := p.parseExpression(LOWEST)
-
-	if !p.expectPeek(lexer.RPAREN) {
-		return nil
-	}
-
-	return exp
-}
-
-func (p *Parser) curTokenIs(t lexer.TokenName) bool {
-	return p.curToken.Name == t
-}
-
-func (p *Parser) peekTokenIs(t lexer.TokenName) bool {
-	return p.peekToken.Name == t
-}
-
-func (p *Parser) expectPeek(t lexer.TokenName) bool {
-	if p.peekTokenIs(t) {
-		p.nextToken()
-		return true
-	} else {
-		p.peekError(t)
-		return false
-	}
-}
-
-func (p *Parser) parseReturnStatement() *ast.ReturnStatement {
-	stmt := &ast.ReturnStatement{Token: p.curToken}
-
-	p.nextToken()
-
-	stmt.ReturnValue = p.parseExpression(LOWEST)
+	stmt.Expression = p.parseExpression(LOWEST)
 
 	if p.peekTokenIs(lexer.SEMICOLON) {
 		p.nextToken()
@@ -188,10 +221,12 @@ func (p *Parser) parseReturnStatement() *ast.ReturnStatement {
 	return stmt
 }
 
-func (p *Parser) parseExpressionStatement() *ast.ExpressionStatement {
-	stmt := &ast.ExpressionStatement{Token: p.curToken}
+func (p *Parser) parseReturnStatement() *ast.ReturnStatement {
+	stmt := &ast.ReturnStatement{Token: p.curToken}
 
-	stmt.Expression = p.parseExpression(LOWEST)
+	p.nextToken()
+
+	stmt.ReturnValue = p.parseExpression(LOWEST)
 
 	if p.peekTokenIs(lexer.SEMICOLON) {
 		p.nextToken()
@@ -214,76 +249,10 @@ func (p *Parser) parseExpression(precedence int) ast.Expression {
 		}
 
 		p.nextToken()
-
 		leftExp = infix(leftExp)
 	}
 
 	return leftExp
-}
-
-func (p *Parser) noPrefixParseFnError(t lexer.TokenName) {
-	msg := fmt.Sprintf("no prefix parse function for %s found", t)
-	p.errors = append(p.errors, msg)
-}
-
-func (p *Parser) parsePrefixExpression() ast.Expression {
-	expression := &ast.PrefixExpression{
-		Token:    p.curToken,
-		Operator: p.curToken.Literal,
-	}
-
-	p.nextToken()
-
-	expression.Right = p.parseExpression(PREFIX) //此时curtoken是prefix后面的那个，即是prefix的右边的表达式的内容
-
-	return expression
-}
-
-func (p *Parser) parseInfixExpression(left ast.Expression) ast.Expression {
-	expression := &ast.InfixExpression{
-		Token:    p.curToken,
-		Operator: p.curToken.Literal,
-		Left:     left,
-	}
-
-	precedence := p.curPrecedence()
-	p.nextToken()
-	expression.Right = p.parseExpression(precedence)
-
-	return expression
-}
-
-func (p *Parser) peekPrecedence() int { //返回下一个token(peektoken)的优先级
-	if p, ok := precedences[p.peekToken.Name]; ok {
-		return p
-	}
-
-	return LOWEST
-}
-
-func (p *Parser) curPrecedence() int { //返回当前token(curtoken)的优先级
-	if p, ok := precedences[p.curToken.Name]; ok {
-		return p
-	}
-
-	return LOWEST
-}
-
-func (p *Parser) parseBlockStatement() *ast.BlockStatement { //花括号中的内容
-	block := &ast.BlockStatement{Token: p.curToken}
-	block.Statements = []ast.Statement{}
-
-	p.nextToken()
-
-	for !p.curTokenIs(lexer.RBRACE) { //遇到"}"则block结束
-		stmt := p.parseStatement()
-		if stmt != nil {
-			block.Statements = append(block.Statements, stmt)
-		}
-		p.nextToken()
-	}
-
-	return block
 }
 
 func (p *Parser) parseIfExpression() ast.Expression {
@@ -318,55 +287,82 @@ func (p *Parser) parseIfExpression() ast.Expression {
 	return expression
 }
 
-func (p *Parser) parseFuncLiteral() ast.Expression {
-	lit := &ast.FuncLiteral{Token: p.curToken}
-
-	if !p.expectPeek(lexer.LPAREN) {
-		return nil
-	}
-
-	lit.Parameters = p.parseFuncParameters()
-
-	if !p.expectPeek(lexer.LBRACE) {
-		return nil
-	}
-
-	lit.Body = p.parseBlockStatement()
-
-	return lit
-}
-
-func (p *Parser) parseFuncParameters() []*ast.Identifier { //函数的参数
-	identifiers := []*ast.Identifier{}
-
-	if p.peekTokenIs(lexer.RPAREN) {
-		p.nextToken()
-		return identifiers
-	}
-
+func (p *Parser) parseGroupedExpression() ast.Expression {
 	p.nextToken()
 
-	ident := &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
-	identifiers = append(identifiers, ident)
-
-	for p.peekTokenIs(lexer.COMMA) {
-		p.nextToken()
-		p.nextToken()
-		ident := &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
-		identifiers = append(identifiers, ident)
-	}
+	exp := p.parseExpression(LOWEST)
 
 	if !p.expectPeek(lexer.RPAREN) {
 		return nil
 	}
 
-	return identifiers
+	return exp
 }
 
-func (p *Parser) parseCallExpression(function ast.Expression) ast.Expression {
-	exp := &ast.CallExpression{Token: p.curToken, Function: function}
-	exp.Arguments = p.parseCallArguments()
-	return exp
+func (p *Parser) parsePrefixExpression() ast.Expression {
+	expression := &ast.PrefixExpression{
+		Token:    p.curToken,
+		Operator: p.curToken.Literal,
+	}
+
+	p.nextToken()
+
+	expression.Right = p.parseExpression(PREFIX) //此时curtoken是prefix后面的那个，即是prefix的右边的表达式的内容
+
+	return expression
+}
+
+func (p *Parser) parseInfixExpression(left ast.Expression) ast.Expression {
+	expression := &ast.InfixExpression{
+		Token:    p.curToken,
+		Operator: p.curToken.Literal,
+		Left:     left,
+	}
+
+	precedence := p.curPrecedence()
+	p.nextToken()
+	expression.Right = p.parseExpression(precedence)
+
+	return expression
+}
+
+func (p *Parser) curTokenIs(t lexer.TokenName) bool {
+	return p.curToken.Name == t
+}
+
+func (p *Parser) peekTokenIs(t lexer.TokenName) bool {
+	return p.peekToken.Name == t
+}
+
+func (p *Parser) expectPeek(t lexer.TokenName) bool {
+	if p.peekTokenIs(t) {
+		p.nextToken()
+		return true
+	}
+	p.peekError(t)
+	return false
+
+}
+
+func (p *Parser) nextToken() {
+	p.curToken = p.peekToken
+	p.peekToken = p.l.NextToken()
+}
+
+func (p *Parser) curPrecedence() int { //返回当前token(curtoken)的优先级
+	if p, ok := precedences[p.curToken.Name]; ok {
+		return p
+	}
+
+	return LOWEST
+}
+
+func (p *Parser) peekPrecedence() int { //返回下一个token(peektoken)的优先级
+	if p, ok := precedences[p.peekToken.Name]; ok {
+		return p
+	}
+
+	return LOWEST
 }
 
 func (p *Parser) parseCallArguments() []ast.Expression {
@@ -392,8 +388,10 @@ func (p *Parser) parseCallArguments() []ast.Expression {
 	return args
 }
 
-func (p *Parser) parseTextLiteral() ast.Expression {
-	return &ast.TextLiteral{Token: p.curToken, Value: p.curToken.Literal}
+func (p *Parser) parseCallExpression(function ast.Expression) ast.Expression {
+	exp := &ast.CallExpression{Token: p.curToken, Function: function}
+	exp.Arguments = p.parseCallArguments()
+	return exp
 }
 
 func New(l *lexer.Lexer) *Parser {
